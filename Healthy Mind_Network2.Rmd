@@ -1,0 +1,2472 @@
+---
+title: "Healthy Mind_Network2"
+author: "Audrey Zhang"
+date: "2025-04-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("/Users/zzy/PhD/24:25/Network anlaysis publication/Scripts")
+
+# Load required packages
+install.packages("robustbase", type = "binary")
+library(tidyverse)
+library(readr)
+library(naniar)
+library(VIM)        # for missing data visualization
+library(mice)       # for missing data patterns
+library(corrplot)   # for correlation visualization
+library(qgraph)     # for network analysis
+library(igraph)     # for network metrics
+library(huge)
+library(bootnet)
+library(gridExtra)
+library(cowplot)
+library(ggplot2)
+library(NetworkComparisonTest)
+```
+
+
+```{r cars}
+# Read the CSV file
+hms_data <- read_csv("HMS_2023-2024_PUBLIC_instchars.csv")
+
+yes_to_all <- hms_data %>%
+    filter( 
+         Diversity== "Yes" ) %>%
+  nrow()
+
+print(paste0("Number of participants who answered Yes to all specified columns: ", yes_to_all))
+# Number of participants who answered Yes to all elective module diversity: 18299.
+# Decided to go with thiselective modules Diversity, and the Standard Module to build the main plot of Belongingenss network. 
+# Will be droping Academic retention, KnowAtt, UpBy, Coping, and Climate, because they do not contain the intertested constraucts (i.e., belongingness, measures, climate), also standard module and diveristy alone provide enough participants to do pna with 20-30 constructs. 
+
+hms_filtered <- hms_data %>%
+  filter(Diversity == "Yes")
+```
+
+
+# 1-4. Selecting from Standard Module: fincur, finpast, food_worry, housing_worry
+```{r}
+# Reverse the values so higher means more stressful financial situation now
+fincur <- function(data) {
+  reversed <- 6 - data$fincur
+  return(reversed) 
+}
+
+# Reverse the values so higher means more stressful financial situation past
+finpast <- function(data) {
+  reversed <- 6 - data$finpast
+  return(reversed) 
+}
+
+food_worry <- function(data) {
+  return(data$food_worry) 
+}
+
+housing_worry <- function(data) {
+  return(data$housing_worry)
+}
+
+# Calculate all scores
+# First decide which dataframe you want to use and modify
+hms_filtered$fincur_score <- fincur(hms_filtered)
+hms_filtered$finpast_score <- finpast(hms_filtered)
+hms_filtered$food_worry_score <- food_worry(hms_filtered)
+hms_filtered$housing_worry_score <- housing_worry(hms_filtered)
+```
+
+
+# 5. Selecting from Standard Module: antiracism, higher score means more anti racism effort
+```{r}
+antiracism <- function(data) {
+  recoded <- rep(NA, length(data$antiracism))
+  
+  # Recode to 5-point scale
+  recoded[data$antiracism == 1 | data$antiracism == 4] <- 5  # Strongly agree/Agree -> 5
+  recoded[data$antiracism == 5] <- 4                        # Somewhat agree -> 4
+  recoded[data$antiracism == 6] <- 3                        # Somewhat disagree -> 3
+  recoded[data$antiracism == 7] <- 2                        # Disagree -> 2
+  recoded[data$antiracism == 8] <- 1                        # Strongly disagree -> 1
+  
+  return(recoded)
+}
+
+# Apply the function to your dataset
+hms_filtered$antiracism_score <- antiracism(hms_filtered)
+```
+
+
+
+# 6. Selecting from Standard Module: GPA
+```{r}
+create_gpa_construct <- function(data) {
+  # Make a copy
+  transformed_data <- data
+  transformed_data$gpa_numeric <- NA
+  
+  # Assign GPA on a 1-5 scale where 5 is highest
+  if ("gr_A" %in% names(data)) transformed_data$gpa_numeric[data$gr_A == 1] <- 5  # A = 5
+  if ("gr_B" %in% names(data)) transformed_data$gpa_numeric[data$gr_B == 1] <- 4  # B = 4
+  if ("gr_C" %in% names(data)) transformed_data$gpa_numeric[data$gr_C == 1] <- 3  # C = 3
+  if ("gr_D" %in% names(data)) transformed_data$gpa_numeric[data$gr_D == 1] <- 2  # D = 2
+  if ("gr_F" %in% names(data)) transformed_data$gpa_numeric[data$gr_F == 1] <- 1  # F = 1
+  
+  # Set NAs for rows with no grade or don't know
+  if ("gr_none" %in% names(data)) transformed_data$gpa_numeric[data$gr_none == 1] <- NA
+  if ("gr_dk" %in% names(data)) transformed_data$gpa_numeric[data$gr_dk == 1] <- NA
+  
+  return(transformed_data)
+}
+
+# Apply the transformation
+hms_filtered <- create_gpa_construct(hms_filtered)
+summary(hms_filtered$gpa_numeric)
+```
+
+
+# 7. Selecting from Standard Module: Persistence
+```{r}
+#Reverse the score, so higher score, means more determinanation to complete degree. 
+hms_filtered$persistence_score <- 7 - hms_filtered$persist
+summary(hms_filtered$persistence_score)
+```
+
+
+# 8. Belonging score as mean, belong1 is from Standard Module
+```{r}
+belonging_items <- function(data) {
+  data_copy <- data
+  # Reverse belong1 and belong2 so higher scores means more belonging
+  if ("belong1" %in% names(data)) {
+    data_copy$sense_of_community <- 7 - data$belong1
+  }
+  return(data_copy)
+}
+
+# Apply the function to create individual belonging items
+hms_filtered <- belonging_items(hms_filtered)
+
+# Check the new variables
+summary(hms_filtered$sense_of_community)
+```
+
+
+# 9 - 13. Selecting from Standard Module: Fourish, Depression, Anxiety, Eating Disorder, Loneliness  - for all values, higher scores means better mental health. 
+```{r}
+# flourish: Sum of diener1-8 variables (positive mental health measure)
+hms_filtered$flourish
+```
+
+
+```{r}
+# PHQ-9 (depression): 9 items scored 0-3 each
+max_deprawsc <- 9 * 3  # 27
+
+# GAD-7 (anxiety): 7 items scored 0-3 each
+max_anx_score <- 7 * 3  # 21
+
+# SCOFF (eating disorder): 5 items scored 0-1 each
+max_ed_scoff <- 5 * 1  # 5
+
+# Loneliness scale: 3 items, typically scored 1-3 each
+max_lonesc <- 3 * 3  # 9 (adjust if your scale is different)
+
+# Now reverse-code each measure, so higher score mean better mental health
+hms_filtered$deprawsc_rev <- max_deprawsc - hms_filtered$deprawsc
+hms_filtered$anx_score_rev <- max_anx_score - hms_filtered$anx_score
+hms_filtered$ed_scoff_rev <- max_ed_scoff - hms_filtered$ed_scoff
+hms_filtered$lonesc_rev <- max_lonesc - hms_filtered$lonesc
+```
+
+
+```{r}
+# Check deprawsc_rev
+cat("\n----- deprawsc_rev (Reversed Depression Score) -----\n")
+zero_count <- sum(hms_filtered$deprawsc_rev == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$deprawsc_rev))
+total_obs <- length(hms_filtered$deprawsc_rev)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #0.66% 
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #8.90%
+
+# Check anx_score_rev
+cat("\n----- anx_score_rev (Reversed Anxiety Score) -----\n")
+zero_count <- sum(hms_filtered$anx_score_rev == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$anx_score_rev))
+total_obs <- length(hms_filtered$anx_score_rev)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #3.20%
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #0.95%
+
+# Check ed_scoff_rev
+cat("\n----- ed_scoff_rev (Reversed Eating Disorder Score) -----\n")
+zero_count <- sum(hms_filtered$ed_scoff_rev == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$ed_scoff_rev))
+total_obs <- length(hms_filtered$ed_scoff_rev)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #0.95%
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #8.21% 
+
+# Check lonesc_rev
+cat("\n----- lonesc_rev (Reversed Loneliness Score) -----\n")
+zero_count <- sum(hms_filtered$lonesc_rev == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$lonesc_rev))
+total_obs <- length(hms_filtered$lonesc_rev)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #11.33% 
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #8.23%
+
+# Check flourish (original - already in positive direction)
+cat("\n----- flourish (Original Flourishing Score) -----\n")
+zero_count <- sum(hms_filtered$flourish == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$flourish))
+total_obs <- length(hms_filtered$flourish)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #0.00% 
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #7.54%
+```
+
+
+# 14. Selecting from Standard Module: Racial Trauma. Higher scores means less trauma. 
+```{r}
+racial_trauma_sum <- function(data) {
+  trauma_cols <- c("racetrauma1", "racetrauma2", "racetrauma3", 
+                  "racetrauma4", "racetrauma5", "racetrauma6", "racetrauma7")
+  
+  # Create a copy of the data
+  data_reversed <- data
+  
+  # Reverse each individual item (1 becomes 4, 2 becomes 3, 3 becomes 2, 4 becomes 1)
+  for (col in trauma_cols) {
+    if (col %in% names(data)) {
+      data_reversed[[col]] <- 5 - data[[col]]  # 5 minus original value reverses a 1-4 scale
+    }
+  }
+  
+  # Calculate the sum of reversed scores
+  data$racial_trauma_composite_reversed <- rowSums(data_reversed[trauma_cols], na.rm = TRUE)
+  
+  return(data$racial_trauma_composite_reversed)
+}
+
+# Apply the function
+hms_filtered$racial_trauma_score_reversed <- racial_trauma_sum(hms_filtered)
+
+# Check the summary statistics
+summary(hms_filtered$racial_trauma_score_reversed)
+
+# Calculate percentages of zeros and NAs
+zero_count <- sum(hms_filtered$racial_trauma_score_reversed == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$racial_trauma_score_reversed))
+total_obs <- length(hms_filtered$racial_trauma_score_reversed)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n")
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n")
+```
+
+
+# 15. Selecting from Standard Module:Perceived Stigma in the environment (pcv). higher means more stigma
+```{r}
+# Calculate perceived stigma score with reversed scoring for items 1 and 3, higher means more stigma
+stigma_sum <- function(data) {
+ # Reverse code stig_pcv_1 (6 becomes 1, 5 becomes 2, etc.)
+ data$stig_pcv_1_rev <- 7 - data$stig_pcv_1 
+ stigma_cols <- c("stig_pcv_1_rev")
+ data$stigma_composite <- rowSums(data[stigma_cols], na.rm = TRUE)
+ return(data$stigma_composite)
+}
+
+hms_filtered$stigma_score <- stigma_sum(hms_filtered)
+summary(hms_filtered$stigma_score)
+
+zero_count <- sum(hms_filtered$stigma_score == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$stigma_score))
+total_obs <- length(hms_filtered$stigma_score)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #0.10% 
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #0.00%
+```
+
+
+
+
+# 16. Selecting from Standard Module:Personal Stigma (per). higher means more personal stigma. 
+```{r}
+#after reverse coding, higher score means higher stigma to other people
+personal_stigma_sum <- function(data) {
+ # Reverse code stig_per_1 (6 becomes 1, 5 becomes 2, etc.)
+ data$stig_per_1_rev <- 7 - data$stig_per_1
+
+ stigma_cols <- c("stig_per_1_rev")
+ data$personal_stigma_composite <- rowSums(data[stigma_cols], na.rm = TRUE)
+ return(data$personal_stigma_composite)
+}
+
+hms_filtered$personal_stigma_score <- personal_stigma_sum(hms_filtered)
+summary(hms_filtered$personal_stigma_score)
+
+zero_count <- sum(hms_filtered$personal_stigma_score == 0, na.rm = TRUE)
+na_count <- sum(is.na(hms_filtered$personal_stigma_score))
+total_obs <- length(hms_filtered$personal_stigma_score)
+zero_percentage <- (zero_count / total_obs) * 100
+na_percentage <- (na_count / total_obs) * 100
+cat("Percentage of zeros:", sprintf("%.2f%%", zero_percentage), "\n") #18.03% 
+cat("Percentage of NAs:", sprintf("%.2f%%", na_percentage), "\n") #0.00%
+```
+
+
+# 17. Selecting from Diversity Module: School Climate
+```{r}
+# Function to calculate School Climate score - maintaining original scale
+school_climate <- function(data) {
+  # Calculate the sum of climate components
+  climate_score <- data$hostile_friendly + 
+                  data$uncoop_coop + 
+                  data$notwelc_welc + 
+                  data$disresp_resp + 
+                  data$uncomfort_comfort
+  
+  return(climate_score)
+}
+
+# Apply the function to calculate the school climate score
+hms_filtered$school_climate_total <- school_climate(hms_filtered)
+```
+
+
+# 18. 
+```{r}
+# Function to calculate Campus Community Sense of Belonging score
+campus_belonging <- function(data) {
+  # Reverse scoring for all items except exp_leave
+  # For these items, 5 becomes 1, 4 becomes 2, etc.
+  reversed_exp_value <- 6 - data$exp_value
+  reversed_exp_belong <- 6 - data$exp_belong
+  # Don't reverse exp_leave (higher score means more likely to leave)
+  exp_leave <- data$exp_leave
+  reversed_exp_fullpot <- 6 - data$exp_fullpot
+  reversed_exp_community <- 6 - data$exp_community
+  
+  # Calculate the total score
+  belonging_score <- reversed_exp_value + 
+                     reversed_exp_belong + 
+                     exp_leave +           # Not reversed
+                     reversed_exp_fullpot + 
+                     reversed_exp_community
+  
+  return(belonging_score)
+}
+
+# Apply the function to calculate the belonging score
+hms_filtered$campus_belonging_total <- campus_belonging(hms_filtered)
+```
+
+
+#19. valued_total, higher means more feeling of valued. 
+```{r}
+# Function to calculate the Valued score
+valued_score <- function(data) {
+  # Calculate the sum of all three value components
+  value_total <- data$val_faculty + 
+                data$val_peers + 
+                data$val_admin
+  
+  return(value_total)
+}
+
+# Apply the function to calculate the valued score
+hms_filtered$valued_total <- valued_score(hms_filtered)
+```
+
+
+
+
+#20. fairness in school, higher score means more perceived fairness. 
+```{r}
+# Function to calculate the Fairness/Non-discrimination score
+fairness_score <- function(data) {
+  # Calculate the sum of all three fairness components
+  fairness_total <- data$fair_campus + 
+                    data$fair_inclass + 
+                    data$fair_outclass
+  
+  return(fairness_total)
+}
+
+# Apply the function to calculate the fairness score
+hms_filtered$fairness_total <- fairness_score(hms_filtered)
+```
+
+
+#21-22. 
+```{r}
+# Function to calculate Disrespect experiences score (reversed)
+disrespect_score <- function(data) {
+  # Reverse scoring so higher scores mean LESS disrespect/better treatment
+  reversed_exp_rude <- 6 - data$exp_rude
+  reversed_exp_serious <- 6 - data$exp_serious
+  
+  # Calculate the total score
+  disrespect_total <- reversed_exp_rude + reversed_exp_serious
+  
+  return(disrespect_total)
+}
+
+# Function to calculate Representation in classes score (reversed)
+representation_score <- function(data) {
+  # Reverse scoring so higher scores mean BETTER representation
+  reversed_exp_re_prof <- 6 - data$exp_re_prof
+  reversed_exp_re_fear <- 6 - data$exp_re_fear
+  reversed_exp_re_speakall <- 6 - data$exp_re_speakall
+  
+  # Calculate the total score
+  representation_total <- reversed_exp_re_prof + 
+                          reversed_exp_re_fear + 
+                          reversed_exp_re_speakall
+  
+  return(representation_total)
+}
+
+# Apply the functions to calculate the scores
+hms_filtered$respect_total <- disrespect_score(hms_filtered)
+hms_filtered$representation_total <- representation_score(hms_filtered)
+```
+
+
+
+
+#23. group belong, higher score means more belonging to community. 
+```{r}
+hms_filtered$group_belong
+```
+
+
+
+#24-25.social_id_involvement_total, higher score mean more involved in identity activities
+# racial_ethnic_id_total, higher score mean more importance placed on racial identity. 
+```{r}
+# Function to calculate Social Identity Involvement score
+social_identity_involvement <- function(data) {
+  # Calculate the sum of the four social identity involvement items
+  social_id_total <- data$social_re + 
+                     data$social_sexid + 
+                     data$social_genderid + 
+                     data$social_religid
+  
+  return(social_id_total)
+}
+
+# Function to calculate Racial/Ethnic Identity Importance score
+racial_ethnic_identity <- function(data) {
+  # Calculate the sum of the three racial/ethnic identity items
+  re_id_total <- data$re_important + 
+                 data$re_belong + 
+                 data$re_attachment
+  
+  return(re_id_total)
+}
+
+# Apply the functions to calculate the scores
+hms_filtered$social_id_involvement_total <- social_identity_involvement(hms_filtered)
+hms_filtered$racial_ethnic_id_total <- racial_ethnic_identity(hms_filtered)
+```
+
+
+
+
+#26.diversity_climate, higher score means more diversity. 
+```{r}
+# Function to calculate Diversity Climate score
+diversity_climate <- function(data) {
+  # Calculate the sum of the two diversity climate items
+  diversity_total <- data$resp_culture + 
+                     data$effort_divers
+  
+  return(diversity_total)
+}
+
+# Apply the function to calculate the diversity climate score
+hms_filtered$diversity_climate_total <- diversity_climate(hms_filtered)
+```
+
+
+
+
+
+##DATA PREPERATION
+```{r}
+# Define all variables for network analysis
+network_vars <- c(
+  # Socioeconomic background
+  "fincur", "finpast", "food_worry", "housing_worry",
+  
+  # Racial diversity
+  "diversity_climate_total", "antiracism_score", "racial_trauma_score_reversed", "representation_total",
+  
+  # Belongingness
+  "group_belong", "valued_total", "campus_belonging_total", "sense_of_community",
+  
+  # Identity
+  "racial_ethnic_id_total", "social_id_involvement_total",
+  
+  # Academic performance
+  "gpa_numeric", "persistence_score",
+  
+  # Mental health
+  "flourish", "deprawsc_rev", "anx_score_rev", "ed_scoff_rev", "lonesc_rev",
+  
+  # Stigma
+  "personal_stigma_score", "stigma_score",
+  
+  # Campus climate
+  "school_climate_total", "fairness_total", "respect_total"
+)
+
+# Create subset with variables of interest
+network_data <- hms_filtered[network_vars]
+```
+
+
+```{r}
+# List of variables to process
+variables <- c(
+  # Socioeconomic background
+  "fincur", "finpast", "food_worry", "housing_worry",
+  
+  # Racial diversity
+  "diversity_climate_total", "antiracism_score", "racial_trauma_score_reversed", "representation_total",
+  
+  # Belongingness
+  "group_belong", "valued_total", "campus_belonging_total", "sense_of_community",
+  
+  # Identity
+  "racial_ethnic_id_total", "social_id_involvement_total",
+  
+  # Academic performance
+  "gpa_numeric", "persistence_score",
+  
+  # Mental health
+  "flourish", "deprawsc_rev", "anx_score_rev", "ed_scoff_rev", "lonesc_rev",
+  
+  # Stigma
+  "personal_stigma_score", "stigma_score",
+  
+  # Campus climate
+  "school_climate_total", "fairness_total", "respect_total"
+)
+
+# Replace zeros with NAs for all variables in the list
+for (var in variables) {
+  if (var %in% names(hms_filtered)) {
+    hms_filtered[[var]][hms_filtered[[var]] == 0] <- NA
+    cat("Replaced zeros with NAs in", var, "\n")
+  } else {
+    cat("Warning: Variable", var, "not found in dataset\n")
+  }
+}
+
+# Verify the changes by checking for zeros in a few variables
+check_variables <- c("personal_stigma_score", "racial_trauma_score_reversed", 
+                     "campus_belonging_total", "school_climate_total", 
+                     "racial_ethnic_id_total", "fairness_total")
+for (var in check_variables) {
+  if (var %in% names(hms_filtered)) {
+    zero_count <- sum(hms_filtered[[var]] == 0, na.rm = TRUE)
+    na_count <- sum(is.na(hms_filtered[[var]]))
+    total_obs <- length(hms_filtered[[var]])
+    zero_percentage <- (zero_count / total_obs) * 100
+    na_percentage <- (na_count / total_obs) * 100
+    
+    cat(var, "- Zeros:", sprintf("%.2f%%", zero_percentage), 
+        "NAs:", sprintf("%.2f%%", na_percentage), "\n")
+  }
+}
+```
+
+
+# 2. Missing Data Overview
+
+```{r}
+# Load required packages
+library(tidyverse)
+
+# Calculate missing data statistics
+missing_summary <- data.frame(
+  variable = names(network_data),
+  n_missing = colSums(is.na(network_data)),
+  pct_missing = colMeans(is.na(network_data)) * 100,
+  n_available = colSums(!is.na(network_data))
+) %>%
+  arrange(desc(pct_missing))
+
+# Add categories for better interpretation
+missing_summary <- missing_summary %>%
+  mutate(category = case_when(
+    pct_missing < 5 ~ "Minimal (<5%)",
+    pct_missing < 10 ~ "Low (5-10%)",
+    pct_missing < 20 ~ "Moderate (10-20%)",
+    pct_missing < 30 ~ "High (20-30%)",
+    TRUE ~ "Very High (>30%)"
+  ))
+
+# View the summary
+print(missing_summary)
+
+# Create visualization
+ggplot(missing_summary, 
+       aes(x = reorder(variable, -pct_missing), 
+           y = pct_missing,
+           fill = category)) +
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "RdYlBu") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Missing Data Percentages by Variable",
+       x = "Variables",
+       y = "Percentage Missing",
+       fill = "Missing Category")
+```
+#no variable was excluded ask all missingness < 30%. 
+
+```{r}
+# Imputation Setup --------------------------------------------------------
+library(mice)
+
+# Set seed for reproducibility
+set.seed(123)  
+
+# Convert any non-numeric columns to numeric (if necessary)
+network_data <- network_data %>%
+  mutate(across(where(is.factor), as.numeric))
+
+# Perform Multiple Imputation ---------------------------------------------
+imputed_data <- mice(network_data, 
+                     m = 5,            # Number of imputations
+                     maxit = 50,       # Number of iterations
+                     printFlag = FALSE,
+                     method = "pmm")   # Predictive Mean Matching
+
+# Check Convergence -------------------------------------------------------
+plot(imputed_data, layout = c(1, 2))  # Should show converging lines
+
+# Create Completed Dataset ------------------------------------------------
+# Use first imputation (you could also pool results)
+network_data_imputed <- complete(imputed_data, 1)
+
+# write.csv(network_data_imputed, "network_data_imputed.csv", row.names = FALSE)
+
+# Verify Missingness ------------------------------------------------------
+colMeans(is.na(network_data_imputed))  # Should all be 0
+```
+
+
+
+
+
+```{r}
+network_data_original <- network_data_imputed %>% 
+  select(
+    # Socioeconomic background
+    fincur, finpast, food_worry, housing_worry,
+    
+    # Racial diversity
+    diversity_climate_total, antiracism_score, racial_trauma_score_reversed, representation_total,
+    
+    # Belongingness
+    group_belong, valued_total, campus_belonging_total, sense_of_community,
+    
+    # Identity
+    racial_ethnic_id_total, social_id_involvement_total,
+    
+    # Academic performance
+    gpa_numeric, persistence_score,
+    
+    # Mental health
+    flourish, deprawsc_rev, anx_score_rev, ed_scoff_rev, lonesc_rev,
+    
+    # Stigma
+    personal_stigma_score, stigma_score,
+    
+    # Campus climate
+    school_climate_total, fairness_total, respect_total
+  )
+```
+
+
+```{r}
+scaled_data <- scale(network_data_original)
+any_na_after_scaling <- any(is.na(scaled_data))
+any_inf_after_scaling <- any(is.infinite(scaled_data))
+print(paste("NAs after scaling:", any_na_after_scaling))
+print(paste("Infinite values after scaling:", any_inf_after_scaling))
+
+# Remove any columns with zero variance (if any)
+var_check <- apply(scaled_data, 2, function(x) var(x))
+zero_var_cols <- which(var_check < 1e-10)
+if(length(zero_var_cols) > 0) {
+  print("Columns with zero/near-zero variance:")
+  print(names(network_data_original)[zero_var_cols])
+  scaled_data <- scaled_data[, var_check >= 1e-10]
+}
+
+# Convert to correlation matrix using cor_auto for robust handling
+# Use pairwise deletion for any remaining missing values
+cor_matrix <- cor_auto(scaled_data, missing = "pairwise")
+
+# Apply graphical LASSO with EBIC for optimal model selection
+# n = sample size, gamma between 0-0.5 is less sparse, 0.5-1 is more sparse
+graph_result <- EBICglasso(cor_matrix, n = nrow(scaled_data), gamma = 0.5)
+```
+
+
+
+```{r}
+name_mapping <- c(
+  # Socioeconomic background
+  fincur = "FNC",
+  finpast = "FNP",
+  food_worry = "FOW",
+  housing_worry = "HSW",
+  
+  # Racial diversity
+  diversity_climate_total = "DVC",
+  antiracism_score = "ARS",
+  racial_trauma_score_reversed = "RTR",
+  representation_total = "REP",
+  
+  # Belongingness
+  group_belong = "GRP",
+  valued_total = "VAL",
+  campus_belonging_total = "CBT",
+  sense_of_community = "COM",
+  
+  # Identity
+  racial_ethnic_id_total = "RID",
+  social_id_involvement_total = "SID",
+  
+  # Academic performance
+  gpa_numeric = "GPA",
+  persistence_score = "PER",
+  
+  # Mental health
+  flourish = "FLR",
+  deprawsc_rev = "DEP",
+  anx_score_rev = "ANX",
+  ed_scoff_rev = "EDS",
+  lonesc_rev = "LON",
+  
+  # Stigma
+  personal_stigma_score = "PST",
+  stigma_score = "STG",
+  
+  # Campus climate
+  school_climate_total = "SCL",
+  fairness_total = "FAR",
+  respect_total = "RSP"
+)
+```
+
+
+```{r}
+group_list <- list(
+  "Socioeconomic Background" = which(colnames(scaled_data) %in% 
+    c("fincur", "finpast", "food_worry", "housing_worry")),
+  
+  "Racial Diversity" = which(colnames(scaled_data) %in% 
+    c("diversity_climate_total", "antiracism_score", "racial_trauma_score_reversed", "representation_total")),
+  
+  "Belongingness" = which(colnames(scaled_data) %in% 
+    c("group_belong", "valued_total", "campus_belonging_total", "sense_of_community")),
+  
+  "Identity" = which(colnames(scaled_data) %in% 
+    c("racial_ethnic_id_total", "social_id_involvement_total")),
+  
+  "Academic Performance" = which(colnames(scaled_data) %in% 
+    c("gpa_numeric", "persistence_score")),
+  
+  "Mental Health" = which(colnames(scaled_data) %in% 
+    c("flourish", "deprawsc_rev", "anx_score_rev", "ed_scoff_rev", "lonesc_rev")),
+  
+  "Stigma" = which(colnames(scaled_data) %in% 
+    c("personal_stigma_score", "stigma_score")),
+  
+  "Campus Climate" = which(colnames(scaled_data) %in% 
+    c("school_climate_total", "fairness_total", "respect_total"))
+)
+
+# Update the color palette for 8 groups (reduced from 10)
+custom_colors <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", 
+                  "#0072B2", "#D55E00", "#CC79A7", "#999999")
+```
+
+
+
+```{r}
+overall_cor <- cor(scaled_data)
+graph_result <- filter_correlations(overall_cor, threshold = 0.1)
+
+network_obj <- estimateNetwork(
+  scaled_data,
+  default = "EBICglasso",
+  corMethod = "cor_auto"
+)
+
+graph_result <- getWmat(network_obj)
+
+
+# For gamma:
+gamma_used <- network_obj$arguments$gamma
+print(paste("Gamma:", gamma_used))
+
+lambda_selected <- network_obj$results$lambda[which.min(network_obj$results$ebic)]
+print(paste("Lambda (alternative):", lambda_selected))
+
+# 3. EBIC value at selected lambda
+ebic_value <- min(network_obj$results$ebic, na.rm = TRUE)
+print(paste("EBIC value:", ebic_value))
+
+# 4. Edge weight statistics
+edge_weights <- graph_result[upper.tri(graph_result)]
+nonzero_edges <- edge_weights[edge_weights != 0]
+
+cat("\nEdge Weight Statistics:\n")
+cat("Range:", min(nonzero_edges), "to", max(nonzero_edges), "\n")
+cat("Mean (non-zero):", mean(abs(nonzero_edges)), "\n")
+cat("Median (non-zero):", median(abs(nonzero_edges)), "\n")
+cat("Positive edges:", sum(edge_weights > 0), "\n")
+cat("Negative edges:", sum(edge_weights < 0), "\n")
+
+# 5. Summary output
+cat("\n=== Network Summary ===\n")
+cat("Nodes:", ncol(graph_result), "\n")
+cat("Edges:", sum(graph_result != 0) / 2, "\n")
+cat("Density:", density, "\n")
+cat("Gamma:", gamma_used, "\n")
+cat("Lambda:", lambda_selected, "\n")
+cat("EBIC:", ebic_value, "\n")
+```
+```{r}
+# Extract edge weights
+edge_weights <- graph_result[upper.tri(graph_result)]
+nonzero_edges <- edge_weights[edge_weights != 0]
+abs_nonzero_edges <- abs(nonzero_edges)
+
+# Median absolute edge strength
+median_abs_edge <- median(abs_nonzero_edges)
+cat("Median absolute edge strength:", round(median_abs_edge, 3), "\n")
+
+# Check distribution shape
+library(e1071)  # for skewness
+skewness_value <- skewness(abs_nonzero_edges)
+cat("Skewness:", round(skewness_value, 3), "\n")
+
+# Visualize distribution
+hist(abs_nonzero_edges, 
+     breaks = 30,
+     main = "Distribution of Absolute Edge Weights",
+     xlab = "Absolute Partial Correlation",
+     col = "lightblue")
+
+# Summary statistics
+cat("\n=== Edge Weight Distribution ===\n")
+summary(abs_nonzero_edges)
+
+# Interpretation guide:
+# Skewness < -1 or > 1: highly skewed
+# Skewness between -0.5 and 0.5: approximately symmetric/uniform
+# Skewness between 0.5 and 1 or -1 and -0.5: moderately skewed
+```
+
+
+```{r}
+# Create network visualization (unchanged except for title)
+network <- qgraph(graph_result,
+                 layout = "spring",
+                 labels = name_mapping[colnames(scaled_data)],
+                 groups = group_list,
+                 color = custom_colors,
+                 diag = FALSE,
+                 directed = FALSE,
+                 cut = 0.1,        # Only show edges above this strength
+                 minimum = 0.1,    # Minimum edge strength to display
+                 maximum = 1,      # Maximum edge strength (for width scaling)
+                 vsize = 6,        # Node size
+                 border.color = "black",
+                 border.width = 1.5,
+                 edge.color = "grey50",
+                 title = "Belongingness Network Plot_27Apr") 
+
+# Print abbreviation key (unchanged)
+cat("\nAbbreviation Key:\n")
+for (i in seq_along(name_mapping)) {
+  if (names(name_mapping)[i] %in% colnames(scaled_data)) {
+    cat(sprintf("%s = %s\n", name_mapping[i], names(name_mapping)[i]))
+  }
+}
+```
+
+
+```{r}
+# Node-specific statistics (for sections 4.1.1-4.1.3)
+library(qgraph)
+
+# Make sure graph_result has the correct column names
+# If it doesn't already, apply the name mapping:
+colnames(graph_result) <- name_mapping[colnames(graph_result)]
+rownames(graph_result) <- name_mapping[rownames(graph_result)]
+
+# Calculate centrality
+centrality_results <- centrality_auto(graph_result)
+
+# Belongingness node degrees
+belonging_nodes <- c("GRP", "VAL", "CBT", "COM")
+belonging_indices <- which(colnames(graph_result) %in% belonging_nodes)
+belonging_degrees <- rowSums(graph_result[belonging_indices, ] != 0) - 1  # Subtract 1 to exclude diagonal
+belonging_strength <- rowSums(abs(graph_result[belonging_indices, ]))
+
+cat("\n=== Belongingness Variables ===\n")
+cat("Node degrees (number of edges):\n")
+for(i in 1:length(belonging_nodes)) {
+  cat(sprintf("%s: %d edges\n", belonging_nodes[i], belonging_degrees[i]))
+}
+cat("Mean degree:", round(mean(belonging_degrees), 2), "\n")
+cat("Range:", min(belonging_degrees), "to", max(belonging_degrees), "\n")
+cat("Total edges from belongingness nodes:", sum(belonging_degrees)/2, "\n")  # Divide by 2 to avoid double-counting
+
+# Socioeconomic node degrees
+ses_nodes <- c("FNC", "FNP", "FOW", "HSW")
+ses_indices <- which(colnames(graph_result) %in% ses_nodes)
+ses_degrees <- rowSums(graph_result[ses_indices, ] != 0) - 1
+ses_strength <- rowSums(abs(graph_result[ses_indices, ]))
+
+cat("\n=== Socioeconomic Variables ===\n")
+cat("Node degrees (number of edges):\n")
+for(i in 1:length(ses_nodes)) {
+  cat(sprintf("%s: %d edges\n", ses_nodes[i], ses_degrees[i]))
+}
+cat("Mean degree:", round(mean(ses_degrees), 2), "\n")
+cat("Range:", min(ses_degrees), "to", max(ses_degrees), "\n")
+cat("Mean strength:", round(mean(ses_strength), 3), "\n")
+
+# Stigma node degrees
+stigma_nodes <- c("PST", "STG")
+stigma_indices <- which(colnames(graph_result) %in% stigma_nodes)
+stigma_degrees <- rowSums(graph_result[stigma_indices, ] != 0) - 1
+stigma_strength <- rowSums(abs(graph_result[stigma_indices, ]))
+
+cat("\n=== Stigma Variables ===\n")
+cat("Node degrees (number of edges):\n")
+for(i in 1:length(stigma_nodes)) {
+  cat(sprintf("%s: %d edges\n", stigma_nodes[i], stigma_degrees[i]))
+}
+cat("Mean degree:", round(mean(stigma_degrees), 2), "\n")
+cat("Mean strength:", round(mean(stigma_strength), 3), "\n")
+
+# Mental health + Academic cluster density (for section 4.1.2)
+mh_academic_nodes <- c("FLR", "DEP", "ANX", "EDS", "LON", "GPA", "PER")
+mh_academic_indices <- which(colnames(graph_result) %in% mh_academic_nodes)
+mh_academic_subgraph <- graph_result[mh_academic_indices, mh_academic_indices]
+
+# Within-cluster edges
+within_edges <- sum(mh_academic_subgraph != 0) / 2  # Divide by 2 because symmetric
+possible_within <- choose(length(mh_academic_nodes), 2)
+within_density <- within_edges / possible_within
+
+# Between-cluster edges (to all other nodes)
+all_other_indices <- which(!colnames(graph_result) %in% mh_academic_nodes)
+between_edges <- sum(graph_result[mh_academic_indices, all_other_indices] != 0)
+possible_between <- length(mh_academic_nodes) * length(all_other_indices)
+between_density <- between_edges / possible_between
+
+cat("\n=== Mental Health + Academic Cluster ===\n")
+cat("Within-cluster edges:", within_edges, "/", possible_within, 
+    sprintf("(%.1f%%)\n", within_density * 100))
+cat("Between-cluster edges:", between_edges, "/", possible_between, 
+    sprintf("(%.1f%%)\n", between_density * 100))
+
+# Flourishing (FLR) specific stats
+flr_index <- which(colnames(graph_result) == "FLR")
+flr_edges <- graph_result[flr_index, ] != 0
+flr_degree <- sum(flr_edges) - 1  # Subtract self
+flr_strength <- sum(abs(graph_result[flr_index, ]))
+
+# FLR connections to specific MH variables
+mh_vars <- c("DEP", "ANX", "LON", "EDS")
+flr_to_mh <- sum(colnames(graph_result)[flr_edges] %in% mh_vars)
+
+# FLR connections to academic variables
+academic_vars <- c("GPA", "PER")
+flr_to_academic <- sum(colnames(graph_result)[flr_edges] %in% academic_vars)
+
+cat("\n=== Flourishing (FLR) Statistics ===\n")
+cat("Total degree:", flr_degree, "\n")
+cat("Strength centrality:", round(flr_strength, 3), "\n")
+cat("Connections to mental health variables:", flr_to_mh, "\n")
+cat("Connections to academic variables:", flr_to_academic, "\n")
+
+# Overall network percentage for belongingness edges
+total_edges <- sum(graph_result != 0) / 2
+belonging_total_edges <- sum(belonging_degrees) / 2
+belonging_percentage <- (belonging_total_edges / total_edges) * 100
+
+cat("\n=== Belongingness Network Integration ===\n")
+cat(sprintf("Belongingness edges: %.0f of %.0f total (%.1f%%)\n", 
+            belonging_total_edges, total_edges, belonging_percentage))
+```
+
+
+```{r}
+# Average edge strength for stigma variables
+pst_edges <- graph_result[which(colnames(graph_result) == "PST"), ]
+pst_edges_nonzero <- pst_edges[pst_edges != 0]
+pst_mean_edge <- mean(abs(pst_edges_nonzero))
+
+stg_edges <- graph_result[which(colnames(graph_result) == "STG"), ]
+stg_edges_nonzero <- stg_edges[stg_edges != 0]
+stg_mean_edge <- mean(abs(stg_edges_nonzero))
+
+cat("PST mean edge weight:", round(pst_mean_edge, 3), "\n")
+cat("STG mean edge weight:", round(stg_mean_edge, 3), "\n")
+
+# Compare to belongingness
+grp_edges <- graph_result[which(colnames(graph_result) == "GRP"), ]
+grp_mean_edge <- mean(abs(grp_edges[grp_edges != 0]))
+cat("GRP mean edge weight:", round(grp_mean_edge, 3), "\n")
+```
+
+
+```{r}
+adj_matrix <- abs(graph_result) # Take absolute values for edge weights
+diag(adj_matrix) <- 0 # Remove self-loops
+
+# Create igraph object
+ig_graph <- graph_from_adjacency_matrix(
+  adj_matrix,
+  mode = "undirected",
+  weighted = TRUE
+)
+
+# Step 2: Apply community detection (walktrap algorithm)
+comm_result <- cluster_walktrap(ig_graph)
+membership <- membership(comm_result)
+print("Community Structure:")
+print(membership)
+
+# Step 3: Convert membership to a format compatible with qgraph groups
+community_groups <- list()
+for (i in 1:max(membership)) {
+  community_groups[[paste("Community", i)]] <- which(membership == i)
+}
+
+# Step 4: Create community-based colors (one color per community)
+community_colors <- rainbow(length(community_groups))
+
+# Step 5: Visualize network with communities
+community_network <- qgraph(graph_result,
+                           layout = "spring",
+                           labels = name_mapping[colnames(scaled_data)],
+                           groups = community_groups,
+                           color = community_colors,
+                           diag = FALSE,
+                           directed = FALSE,
+                           cut = 0.1,
+                           minimum = 0.1,
+                           maximum = 1,
+                           vsize = 6,
+                           border.color = "black",
+                           border.width = 1.5,
+                           edge.color = "grey50",
+                           title = "Belongingness Network with Detected Communities")
+
+# Step 6: Compare with your original grouping
+# You can also plot with your theoretical groups to compare
+theoretical_network <- qgraph(graph_result,
+                             layout = "spring",
+                             labels = name_mapping[colnames(scaled_data)],
+                             groups = group_list,
+                             color = custom_colors,
+                             diag = FALSE,
+                             directed = FALSE,
+                             cut = 0.1,
+                             minimum = 0.1,
+                             maximum = 1,
+                             vsize = 6,
+                             border.color = "black",
+                             border.width = 1.5,
+                             edge.color = "grey50",
+                             title = "Belongingness Network with Theoretical Groups")
+
+# Save a PNG file 
+png("Belongingness_network_theoretical.png", width=1400, height=900, res=120)
+plot(theoretical_network)
+dev.off()
+
+png("Belongingness_network_detected.png", width=1400, height=900, res=120)
+plot(community_network)
+dev.off()
+
+# Step 7: Calculate centrality indices for the network
+centrality_indices <- centrality(community_network)
+centralityPlot(community_network)
+
+# Step 8: Print the mapping between communities and variable names for reference
+cat("\nCommunity Membership:\n")
+for (i in 1:max(membership)) {
+  cat(paste("Community", i, ":", "\n"))
+  for (j in which(membership == i)) {
+    if (j <= length(colnames(scaled_data))) {
+      var_name <- colnames(scaled_data)[j]
+      abbrev <- name_mapping[var_name]
+      cat(paste("  ", abbrev, "=", var_name, "\n"))
+    }
+  }
+  cat("\n")
+}
+
+```
+
+
+# Centrality Stability Analysis (CS-coefficient)
+```{r}
+stability_results <- bootnet(
+  network_obj,
+  nBoots = 1000,
+  type = "case",           # Case-dropping bootstrap
+  statistics = c("strength", "expectedInfluence", "betweenness")
+)
+
+cs_coef <- corStability(stability_results)
+print(cs_coef)  # Should be > 0.50, ideally > 0.25
+```
+
+
+```{r}
+plot(stability_results, statistics = c("strength", "expectedInfluence", "betweenness"))
+
+png("stability_results.png", width=1000, height=800, res=120)
+plot(stability_results,statistics = c("strength", "expectedInfluence", "betweenness"))
+dev.off()
+```
+
+
+```{r}
+# 6. EDGE ACCURACY
+edge_accuracy <- bootnet(
+  network_obj,              # Same object
+  nBoots = 1000,
+  type = "nonparametric"
+)
+
+plot(edge_accuracy, labels = FALSE, order = "sample")
+```
+```{r}
+# Save plots as objects
+p1 <- plot(stability_results, 
+           statistics = c("strength", "expectedInfluence", "betweenness"))
+
+p2 <- plot(edge_accuracy, 
+           labels = FALSE, 
+           order = "sample")
+
+# Combine side by side
+combined_plot <- plot_grid(p1, p2, 
+                          labels = c("a", "b"), 
+                          ncol = 2,
+                          rel_widths = c(1, 1))
+
+# Save
+ggsave("network_stability_combined.png", 
+       combined_plot, 
+       width = 8, 
+       height = 6, 
+       dpi = 300)
+```
+
+
+
+```{r}
+# Calculate centrality measures
+cent_indices <- centrality(network_obj)
+
+# Calculate expected influence
+weight_matrix <- getWmat(network)
+exp_influence <- colSums(weight_matrix)
+
+# Create plotting data frame
+plot_df <- data.frame(
+  node = names(cent_indices$OutDegree),
+  node_abbrev = name_mapping[names(cent_indices$OutDegree)],  # Make sure name_mapping exists
+  Strength = cent_indices$OutDegree,
+  Betweenness = cent_indices$Betweenness,
+  ExpectedInfluence = exp_influence
+) %>% 
+  pivot_longer(
+    cols = c(Strength, Betweenness, ExpectedInfluence),
+    names_to = "measure",
+    values_to = "value"
+  )
+
+# Modified line plot style with x-axis
+centrality_lineplot <- function(data, title, file_name) {
+  p <- ggplot(data, aes(x = reorder(node_abbrev, value), y = value)) +
+    geom_line(aes(group = 1), color = "black", linewidth = 0.7) +
+    geom_point(size = 2, color = "black") +
+    coord_flip() +
+    scale_y_continuous(expand = c(0, 0)) +
+    labs(title = title, x = "", y = "Value") +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+      panel.grid.major.y = element_blank(),
+      axis.text.y = element_text(size = 9, face = "bold"),
+      axis.text.x = element_text(size = 8),
+      axis.title.x = element_text(size = 9, margin = margin(t = 5))
+    )
+  
+  # Save individual plot with 1:2 aspect ratio
+  ggsave(file_name, plot = p, width = 7, height = 10, units = "in", bg = "white")
+  return(p)
+}
+
+# Generate and save plots
+p1 <- centrality_lineplot(filter(plot_df, measure == "Strength"), 
+                         "Strength Centrality", "strength_line_plot.png")
+p2 <- centrality_lineplot(filter(plot_df, measure == "Betweenness"), 
+                         "Betweenness Centrality", "betweenness_line_plot.png")
+p3 <- centrality_lineplot(filter(plot_df, measure == "ExpectedInfluence"), 
+                         "Expected Influence", "influence_line_plot.png")
+
+# Arrange in grid
+grid.arrange(p1, p2, p3, ncol = 3, widths = c(1, 1, 1))
+width_inches <- 16
+height_inches <- 9
+# Save the combined plot using cowplot for better control
+combined_plot <- plot_grid(p1, p2, p3, ncol = 3, rel_widths = c(1, 1, 1))
+
+# Save with 27:9 aspect ratio
+ggsave("centrality_measures_combined.png", 
+       plot = combined_plot, 
+       width = width_inches, 
+       height = height_inches, 
+       units = "in", 
+       bg = "white",
+       dpi = 300)
+```
+
+
+
+```{r}
+
+cent_indices <- centrality(network_obj)
+weight_matrix <- getWmat(network_obj)
+exp_influence <- colSums(weight_matrix)
+
+# 2. Create comprehensive centrality data frame with z-scores
+centrality_df <- data.frame(
+  node = names(cent_indices$OutDegree),
+  node_abbrev = name_mapping[names(cent_indices$OutDegree)],
+  Strength_raw = cent_indices$OutDegree,
+  Betweenness_raw = cent_indices$Betweenness,
+  ExpectedInfluence_raw = exp_influence
+) %>%
+  mutate(
+    # Calculate z-scores
+    Strength_z = scale(Strength_raw)[,1],
+    Betweenness_z = scale(Betweenness_raw)[,1],
+    ExpectedInfluence_z = scale(ExpectedInfluence_raw)[,1],
+    
+    # Calculate rankings (1 = highest centrality)
+    Strength_rank = rank(-Strength_raw),
+    Betweenness_rank = rank(-Betweenness_raw),
+    ExpectedInfluence_rank = rank(-ExpectedInfluence_raw)
+  ) %>%
+  arrange(Strength_rank)
+
+# 3. Display full table
+print(centrality_df)
+
+# 4. Save to CSV for easy reference
+write.csv(centrality_df, "centrality_rankings_table.csv", row.names = FALSE)
+
+# 5. Create a lookup function for easy extraction
+get_centrality_stats <- function(abbrev) {
+  row <- centrality_df %>% filter(node_abbrev == abbrev)
+  cat("\n===", abbrev, "===\n")
+  cat("Strength: rank", row$Strength_rank, ", z =", round(row$Strength_z, 2), "\n")
+  cat("Betweenness: rank", row$Betweenness_rank, ", z =", round(row$Betweenness_z, 2), "\n")
+  cat("Expected Influence: rank", row$ExpectedInfluence_rank, ", z =", round(row$ExpectedInfluence_z, 2), "\n")
+}
+
+# 6. Extract stats for all variables mentioned in your text
+cat("\n========================================\n")
+cat("CENTRALITY STATISTICS FOR MANUSCRIPT\n")
+cat("========================================\n")
+
+# Campus Belonging Total (CBT)
+get_centrality_stats("CBT")
+
+# Sense of Community (COM) - one-item belonging
+get_centrality_stats("COM")
+
+# Mental health variables
+get_centrality_stats("DEP")
+get_centrality_stats("ANX")
+get_centrality_stats("FLR")
+get_centrality_stats("LON")
+get_centrality_stats("EDS")
+
+# Academic/Racial trauma
+get_centrality_stats("RTR")
+
+# Stigma
+get_centrality_stats("STG")
+get_centrality_stats("PST")
+
+# Socioeconomic variables
+get_centrality_stats("HSW")
+get_centrality_stats("FOW")
+get_centrality_stats("FNC")
+get_centrality_stats("FNP")
+
+# Identity
+get_centrality_stats("SID")
+get_centrality_stats("RID")
+
+# Academic performance
+get_centrality_stats("GPA")
+get_centrality_stats("PER")
+
+# Campus climate
+get_centrality_stats("FAR")
+get_centrality_stats("SCL")
+get_centrality_stats("RSP")
+
+# 7. Summary statistics by domain
+cat("\n========================================\n")
+cat("DOMAIN SUMMARIES\n")
+cat("========================================\n")
+
+# Belongingness variables
+belonging_vars <- c("GRP", "VAL", "CBT", "COM")
+belonging_stats <- centrality_df %>% filter(node_abbrev %in% belonging_vars)
+cat("\nBELONGINGNESS (GRP, VAL, CBT, COM):\n")
+cat("Strength ranks:", paste(belonging_stats$Strength_rank, collapse = ", "), "\n")
+cat("Mean Strength rank:", round(mean(belonging_stats$Strength_rank), 1), "\n")
+
+# Mental health variables
+mh_vars <- c("DEP", "ANX", "FLR", "LON", "EDS")
+mh_stats <- centrality_df %>% filter(node_abbrev %in% mh_vars)
+cat("\nMENTAL HEALTH (DEP, ANX, FLR, LON, EDS):\n")
+cat("Strength ranks:", paste(mh_stats$Strength_rank, collapse = ", "), "\n")
+cat("Mean Strength rank:", round(mean(mh_stats$Strength_rank), 1), "\n")
+
+# Socioeconomic variables
+ses_vars <- c("FNC", "FNP", "FOW", "HSW")
+ses_stats <- centrality_df %>% filter(node_abbrev %in% ses_vars)
+cat("\nSOCIOECONOMIC (FNC, FNP, FOW, HSW):\n")
+cat("Strength ranks:", paste(ses_stats$Strength_rank, collapse = ", "), "\n")
+cat("Mean Strength rank:", round(mean(ses_stats$Strength_rank), 1), "\n")
+
+# Academic variables
+academic_vars <- c("GPA", "PER")
+academic_stats <- centrality_df %>% filter(node_abbrev %in% academic_vars)
+cat("\nACADEMIC (GPA, PER):\n")
+cat("Strength ranks:", paste(academic_stats$Strength_rank, collapse = ", "), "\n")
+
+# 8. Create formatted table for manuscript
+manuscript_table <- centrality_df %>%
+  select(node_abbrev, 
+         Strength_rank, Strength_z,
+         Betweenness_rank, Betweenness_z,
+         ExpectedInfluence_rank, ExpectedInfluence_z) %>%
+  arrange(Strength_rank) %>%
+  mutate(across(ends_with("_z"), ~round(., 2)))
+
+print("\n=== MANUSCRIPT TABLE (Top 10) ===")
+print(head(manuscript_table, 10))
+
+# 9. Identify top and bottom quartiles
+n_vars <- nrow(centrality_df)
+bottom_quartile_cutoff <- ceiling(n_vars * 0.75)
+
+bottom_quartile_strength <- centrality_df %>% 
+  filter(Strength_rank >= bottom_quartile_cutoff) %>%
+  pull(node_abbrev)
+
+cat("\n=== BOTTOM QUARTILE (Strength) ===\n")
+cat(paste(bottom_quartile_strength, collapse = ", "), "\n")
+
+# Need these for complete belongingness analysis
+get_centrality_stats("GRP")
+get_centrality_stats("VAL")
+```
+
+
+```{r define-constructs}
+constructs <- list(
+  SocioeconomicBackground = c("fincur", "finpast", "food_worry", "housing_worry"),
+  
+  RacialDiversity = c("diversity_climate_total", "antiracism_score", 
+                     "racial_trauma_score_reversed", "representation_total"),
+  
+  Belongingness = c("group_belong", "valued_total", 
+                   "campus_belonging_total", "sense_of_community"),
+  
+  Identity = c("racial_ethnic_id_total", "social_id_involvement_total"),
+  
+  AcademicPerformance = c("gpa_numeric", "persistence_score"),
+  
+  MentalHealth = c("flourish", "deprawsc_rev", "anx_score_rev", 
+                  "ed_scoff_rev", "lonesc_rev"),
+  
+  Stigma = c("personal_stigma_score", "stigma_score"),
+  
+  CampusClimate = c("school_climate_total", "fairness_total", "respect_total")
+)
+```
+
+
+
+```{r rank-data}
+# Rank all variables (higher raw value = lower rank number = "more" of construct)
+data <- network_data_original 
+ranked_data <- data %>%
+  mutate(across(everything(), ~ rank(-., ties.method = "average", na.last = "keep")))
+```
+
+
+
+```{r consistency-function}
+calculate_consistency <- function(vars, ranked_data, data, n_sim = 1000) {
+  if (!all(vars %in% names(ranked_data))) {
+    missing <- vars[!vars %in% names(ranked_data)]
+    warning("Missing variables: ", paste(missing, collapse = ", "))
+    return(NULL)
+  }
+  
+  # Empirical consistency
+  empirical_ranks <- rowMeans(ranked_data[, vars], na.rm = TRUE)
+  
+  # Perfect consistency benchmark
+  perfect_ranks <- rank(-rowMeans(data[, vars, drop = FALSE], na.rm = TRUE))
+  
+  # Random consistency benchmark
+  random_means <- replicate(n_sim, {
+    random_ranks <- sapply(vars, function(v) sample(ranked_data[[v]]))
+    rowMeans(random_ranks, na.rm = TRUE)
+  })
+  
+  # Calculate SDs
+  empirical_sd <- sd(empirical_ranks, na.rm = TRUE)
+  random_sd <- mean(apply(random_means, 2, sd, na.rm = TRUE))
+  perfect_sd <- sd(perfect_ranks, na.rm = TRUE)
+  
+  # Prepare plotting data
+  plot_data <- data.frame(
+    empirical = empirical_ranks,
+    perfect = perfect_ranks,
+    random = rowMeans(random_means, na.rm = TRUE)
+  )
+  
+  list(
+    empirical_sd = empirical_sd,
+    random_sd = random_sd,
+    perfect_sd = perfect_sd,
+    sd_diff = empirical_sd - random_sd,
+    sd_ratio = empirical_sd / perfect_sd,
+    data = plot_data
+  )
+}
+```
+
+
+```{r run-analysis}
+consistency_results <- map(constructs, ~ {
+  calculate_consistency(
+    vars = .x,
+    ranked_data = ranked_data,
+    data = data,
+    n_sim = 1000
+  )
+})
+```
+
+
+```{r results-table}
+results_table <- map_df(consistency_results, ~ {
+  if(is.null(.x)) return(data.frame())
+  data.frame(
+    SD_Empirical = .x$empirical_sd,
+    SD_Perfect = .x$perfect_sd,
+    SD_Random = .x$random_sd,
+    SD_Diff_vs_Random = .x$sd_diff,
+    SD_Ratio_vs_Perfect = .x$sd_ratio
+  )
+}, .id = "Construct") %>%
+  mutate(across(where(is.numeric), round, 2))
+
+print(results_table)
+```
+
+
+
+```{r consistency-plots}
+plot_list <- imap(consistency_results, ~ {
+  if(is.null(.x)) return(NULL)
+  
+  plot_data <- .x$data %>%
+    arrange(empirical) %>%  # Sort by empirical mean rank for x-axis
+    mutate(participant_order = 1:n())  # Create participant order index
+  
+  # Get one random simulation for visualization
+  set.seed(123)
+  random_sample <- sapply(constructs[[.y]], function(v) sample(ranked_data[[v]]))
+  random_mean <- rowMeans(random_sample)
+  
+  ggplot(plot_data) +
+    # Perfect consistency (blue)
+    geom_line(
+      aes(x = participant_order, y = sort(perfect)), 
+      color = "#0072B2", linewidth = 0.8, alpha = 0.8
+    ) +
+    # Random consistency (brown)
+    geom_line(
+      aes(x = participant_order, y = sort(random_mean)), 
+      color = "#654321", linewidth = 0.8, alpha = 0.8, linetype = "dashed"
+    ) +
+    # Empirical consistency (orange)
+    geom_line(
+      aes(x = participant_order, y = empirical), 
+      color = "#E69F00", linewidth = 1.2
+    ) +
+    labs(
+      title = paste("Rank Order Consistency:", .y),
+      x = "Participant Sorted by Empirical Mean Rank",
+      y = "Mean Rank"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank()
+    ) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0))
+})
+
+walk(plot_list, print)
+
+valid_plots <- plot_list[!sapply(plot_list, is.null)]
+
+# Arrange in a 4x2 grid and save
+output_file <- "consistency_plots_grid.png"
+ggsave(
+  filename = output_file,
+  plot = gridExtra::grid.arrange(
+    grobs = valid_plots,
+    ncol = 4,
+    nrow = 2
+  ),
+  width = 20, 
+  height = 10,
+  dpi = 300
+)
+```
+
+
+
+####################### NCT ################################
+
+
+```{r}
+# Create groups based on sex at birth
+# Create the base network data including sex variable
+network_data_original <- hms_filtered[c("sex_birth", network_vars)]
+
+# Create separate datasets for the two groups
+male_group <- network_data_original[network_data_original$sex_birth == 2, ]
+female_intersex_group <- network_data_original[network_data_original$sex_birth %in% c(1, 3), ]
+
+# Remove the sex variable from both datasets to match original network variables
+male_group <- male_group[network_vars]
+female_intersex_group <- female_intersex_group[network_vars]
+
+# Optional: Get basic summary statistics for each group
+male_group_summary <- summary(male_group)
+female_intersex_group_summary <- summary(female_intersex_group)
+
+# Optional: Get group sizes
+male_n <- nrow(male_group)
+female_intersex_n <- nrow(female_intersex_group)
+
+# Print group sizes
+print(paste("Male group size:", male_n))
+print(paste("Female and Intersex group size:", female_intersex_n))
+```
+
+
+```{r}
+# First create the groups
+network_data_original <- hms_filtered[c("sex_birth", network_vars)]
+male_group <- network_data_original[network_data_original$sex_birth == 2, network_vars]
+female_intersex_group <- network_data_original[network_data_original$sex_birth %in% c(1, 3), network_vars]
+
+# Convert any non-numeric columns to numeric for each group
+male_group <- male_group %>%
+  mutate(across(where(is.factor), as.numeric))
+
+female_intersex_group <- female_intersex_group %>%
+  mutate(across(where(is.factor), as.numeric))
+
+# Impute male group
+male_imputed <- mice(male_group, 
+                    m = 5,
+                    maxit = 50,
+                    printFlag = FALSE,
+                    method = "pmm")
+
+# Impute female/intersex group
+female_intersex_imputed <- mice(female_intersex_group, 
+                               m = 5,
+                               maxit = 50,
+                               printFlag = FALSE,
+                               method = "pmm")
+
+# Check convergence for both groups
+par(mfrow = c(2,1))
+plot(male_imputed, layout = c(1, 2), main = "Male Group Convergence")
+plot(female_intersex_imputed, layout = c(1, 2), main = "Female/Intersex Group Convergence")
+
+# Create completed datasets
+male_data_complete <- complete(male_imputed, 1)
+female_intersex_data_complete <- complete(female_intersex_imputed, 1)
+
+# Verify no missing values in either group
+cat("Missing values in male group:\n")
+print(colMeans(is.na(male_data_complete)))
+
+cat("\nMissing values in female/intersex group:\n")
+print(colMeans(is.na(female_intersex_data_complete)))
+
+# Save the imputed datasets
+write.csv(male_data_complete, "male_network_imputed_28Apr.csv", row.names = FALSE)
+write.csv(female_intersex_data_complete, "female_intersex_network_imputed_28Apr.csv", row.names = FALSE)
+```
+
+```{r}
+# 1. Convert dataframes to numeric matrices
+male_matrix <- as.matrix(male_data_complete)
+female_matrix <- as.matrix(female_intersex_data_complete)
+
+
+# 4. Run NCT with Spearman correlations
+nct_results <- NCT(
+  male_matrix,
+  female_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 5. Print results
+print(nct_results)
+```
+
+
+```{r}
+# Create a function to rename nodes using abbreviations
+rename_nodes <- function(data, name_mapping) {
+  colnames(data) <- name_mapping[colnames(data)]
+  return(data)
+}
+
+# Rename variables in both networks
+male_renamed <- rename_nodes(male_data_complete, name_mapping)
+female_intersex_renamed <- rename_nodes(female_intersex_data_complete, name_mapping)
+
+# Set a fixed layout for consistency
+set.seed(123)  # Ensures reproducibility
+layout_matrix <- qgraph::qgraph(cor(male_renamed), layout = "spring", DoNotPlot = TRUE)$layout
+```
+
+
+
+```{r}
+# Function to filter weak correlations
+filter_correlations <- function(cor_matrix, threshold = 0.15) {
+  cor_matrix[abs(cor_matrix) <= threshold] <- 0  # Set weak correlations to zero
+  return(cor_matrix)
+}
+
+# Compute correlation matrices and apply filtering
+male_cor_filtered <- filter_correlations(cor(male_renamed))
+female_intersex_cor_filtered <- filter_correlations(cor(female_intersex_renamed))
+```
+
+
+```{r}
+# Define groups first as a list
+groups <- list(
+  # Socioeconomic background
+  "Socioeconomic" = which(colnames(male_renamed) %in% 
+                           c("FNC", "FNP", "FOW", "HSW")),
+  
+  # Racial diversity
+  "Racial Diversity" = which(colnames(male_renamed) %in% 
+                             c("DVC", "ARS", "RTR", "REP")),
+  
+  # Belongingness
+  "Belongingness" = which(colnames(male_renamed) %in% 
+                          c("GRP", "VAL", "CBT", "COM")),
+  
+  # Identity
+  "Identity" = which(colnames(male_renamed) %in% 
+                     c("RID", "SID")),
+  
+  # Academic performance
+  "Academic" = which(colnames(male_renamed) %in% 
+                     c("GPA", "PER")),
+  
+  # Mental health
+  "Mental Health" = which(colnames(male_renamed) %in% 
+                          c("FLR", "DEP", "ANX", "EDS", "LON")),
+  
+  # Stigma
+  "Stigma" = which(colnames(male_renamed) %in% 
+                   c("PST", "STG")),
+  
+  # Campus climate
+  "Campus Climate" = which(colnames(male_renamed) %in% 
+                           c("SCL", "FAR", "RSP"))
+)
+
+# Define custom colors
+custom_colors <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", 
+                  "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+```
+
+
+
+```{r}
+# ---------------------------------------------------------------
+# For Male Network
+# ---------------------------------------------------------------
+# Compute correlations (use cor_auto() for mixed/data types)
+male_cor <- cor_auto(male_renamed)  # Handles ordinal/continuous data
+
+# Apply EBICglasso to estimate sparse partial correlation network
+male_network_ebic <- EBICglasso(
+  S = male_cor,                     # Correlation matrix
+  n = nrow(male_renamed),            # Sample size
+  gamma = 0.5,                       # Hyperparameter (default = 0.5; higher = sparser)
+  penalize.diagonal = FALSE          # Do not penalize self-loops
+)
+
+# ---------------------------------------------------------------
+# For Female/Intersex Network
+# ---------------------------------------------------------------
+female_intersex_cor <- cor_auto(female_intersex_renamed)
+female_network_ebic <- EBICglasso(
+  S = female_intersex_cor,
+  n = nrow(female_intersex_renamed),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# ---------------------------------------------------------------
+# For Overall Network (scaled_data)
+# ---------------------------------------------------------------
+overall_cor <- cor_auto(scaled_data)
+graph_result <- EBICglasso(
+  S = overall_cor,
+  n = nrow(scaled_data),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+```
+
+
+```{r}
+# Create the plots and save the objects
+male_plot <- qgraph(male_network_ebic,
+                    layout = "spring",
+                    labels = colnames(male_renamed),
+                    groups = group_list,
+                    color = custom_colors,
+                    diag = FALSE,
+                    directed = FALSE,
+                    cut = 0.1,
+                    minimum = 0.1,
+                    vsize = 6,
+                    border.color = "black",
+                    border.width = 1.5,
+                    edge.color = "grey50",
+                    title = "Male Network (EBICglasso)",
+                    DoNotPlot = TRUE) # This tells qgraph not to plot it right away
+
+female_plot <- qgraph(female_network_ebic,
+                      layout = "spring",
+                      labels = colnames(female_intersex_renamed),
+                      groups = group_list,
+                      color = custom_colors,
+                      diag = FALSE,
+                      directed = FALSE,
+                      cut = 0.1,
+                      minimum = 0.1,
+                      vsize = 6,
+                      border.color = "black",
+                      border.width = 1.5,
+                      edge.color = "grey50",
+                      title = "Female/Intersex Network (EBICglasso)",
+                      DoNotPlot = TRUE)
+
+
+png("male_female_networks.png", width = 2700, height = 900, res = 150)
+par(mfrow = c(1, 2))
+plot(male_plot)
+plot(female_plot)
+dev.off()
+```
+
+
+```{r}
+png("overall_network.png", width = 1600, height = 900, res = 150)
+
+# Plot the overall network
+qgraph(graph_result,
+       layout = "spring",
+       labels = name_mapping[colnames(scaled_data)],
+       groups = group_list,
+       color = custom_colors,
+       diag = FALSE,
+       directed = FALSE,
+       cut = 0.1,
+       minimum = 0.1,
+       vsize = 6,
+       border.color = "black",
+       border.width = 1.5,
+       edge.color = "grey50",
+       title = "Belongingness Network Plot (EBICglasso_12Oct)")
+
+# Close the device
+dev.off()
+```
+
+
+```{r}
+# Create groups based on years at school
+network_data_original <- hms_filtered[c("yr_sch", network_vars)]
+
+# Create separate datasets for the four groups
+freshmen_group <- network_data_original[network_data_original$yr_sch == 1, ]
+sophomore_group <- network_data_original[network_data_original$yr_sch == 2, ]
+senior_group <- network_data_original[network_data_original$yr_sch == 3, ]
+fourormoreyear_group <- network_data_original[network_data_original$yr_sch %in% c(4, 5, 6, 7), ]
+
+# Remove the sex variable from both datasets to match original network variables
+freshmen_group <- freshmen_group[network_vars]
+sophomore_group <- sophomore_group[network_vars]
+senior_group <- senior_group[network_vars]
+fourormoreyear_group <- fourormoreyear_group[network_vars]
+```
+
+
+```{r}
+# Impute freshmen group
+freshmen_imputed <- mice(freshmen_group, 
+                        m = 5,
+                        maxit = 50,
+                        printFlag = FALSE,
+                        method = "pmm")
+
+# Impute sophomore group
+sophomore_imputed <- mice(sophomore_group, 
+                         m = 5,
+                         maxit = 50,
+                         printFlag = FALSE,
+                         method = "pmm")
+
+# Impute senior group
+senior_imputed <- mice(senior_group, 
+                      m = 5,
+                      maxit = 50,
+                      printFlag = FALSE,
+                      method = "pmm")
+
+# Impute four+ year group
+fourormoreyear_imputed <- mice(fourormoreyear_group, 
+                             m = 5,
+                             maxit = 50,
+                             printFlag = FALSE,
+                             method = "pmm")
+
+# Check convergence for all groups
+par(mfrow = c(2,2))
+plot(freshmen_imputed, layout = c(1, 2), main = "Freshmen Group Convergence")
+plot(sophomore_imputed, layout = c(1, 2), main = "Sophomore Group Convergence") 
+plot(senior_imputed, layout = c(1, 2), main = "Senior Group Convergence")
+plot(fourormoreyear_imputed, layout = c(1, 2), main = "Four+ Year Group Convergence")
+
+# Create completed datasets
+freshmen_data_complete <- complete(freshmen_imputed, 1)
+sophomore_data_complete <- complete(sophomore_imputed, 1)
+senior_data_complete <- complete(senior_imputed, 1)
+fourormoreyear_data_complete <- complete(fourormoreyear_imputed, 1)
+```
+
+
+```{r}
+# 1. Convert dataframes to numeric matrices for all four groups
+freshmen_matrix <- as.matrix(freshmen_data_complete)
+sophomore_matrix <- as.matrix(sophomore_data_complete)
+senior_matrix <- as.matrix(senior_data_complete)
+fourormoreyear_matrix <- as.matrix(fourormoreyear_data_complete)
+
+# 2. Run NCT for freshmen vs. sophomore
+nct_freshmen_sophomore <- NCT(
+  freshmen_matrix,
+  sophomore_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 3. Run NCT for freshmen vs. senior
+nct_freshmen_senior <- NCT(
+  freshmen_matrix,
+  senior_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 4. Run NCT for freshmen vs. four+ year students
+nct_freshmen_fourormore <- NCT(
+  freshmen_matrix,
+  fourormoreyear_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 5. Run NCT for sophomore vs. senior
+nct_sophomore_senior <- NCT(
+  sophomore_matrix,
+  senior_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 6. Run NCT for sophomore vs. four+ year students
+nct_sophomore_fourormore <- NCT(
+  sophomore_matrix,
+  fourormoreyear_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 7. Run NCT for senior vs. four+ year students
+nct_senior_fourormore <- NCT(
+  senior_matrix,
+  fourormoreyear_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 8. Print all results
+cat("\n==== Freshmen vs. Sophomore Comparison ====\n")
+print(nct_freshmen_sophomore)
+
+cat("\n==== Freshmen vs. Senior Comparison ====\n")
+print(nct_freshmen_senior)
+
+cat("\n==== Freshmen vs. Four+ Year Comparison ====\n")
+print(nct_freshmen_fourormore)
+
+cat("\n==== Sophomore vs. Senior Comparison ====\n")
+print(nct_sophomore_senior)
+
+cat("\n==== Sophomore vs. Four+ Year Comparison ====\n")
+print(nct_sophomore_fourormore)
+
+cat("\n==== Senior vs. Four+ Year Comparison ====\n")
+print(nct_senior_fourormore)
+```
+
+
+```{r}
+# ---------------------------------------------------------------
+# Compute networks for all four groups
+# ---------------------------------------------------------------
+
+# Rename variables in both networks
+freshmen_renamed <- rename_nodes(freshmen_data_complete, name_mapping)
+sophomore_renamed <- rename_nodes(sophomore_data_complete, name_mapping)
+senior_renamed <- rename_nodes(senior_data_complete, name_mapping)
+fourormoreyear_renamed <- rename_nodes(fourormoreyear_data_complete, name_mapping)
+
+# Freshmen Network
+freshmen_cor <- cor_auto(freshmen_renamed)  # Handles ordinal/continuous data
+freshmen_network_ebic <- EBICglasso(
+  S = freshmen_cor,                     
+  n = nrow(freshmen_renamed),            
+  gamma = 0.5,                       
+  penalize.diagonal = FALSE          
+)
+
+# Sophomore Network
+sophomore_cor <- cor_auto(sophomore_renamed)
+sophomore_network_ebic <- EBICglasso(
+  S = sophomore_cor,
+  n = nrow(sophomore_renamed),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# Senior Network
+senior_cor <- cor_auto(senior_renamed)
+senior_network_ebic <- EBICglasso(
+  S = senior_cor,
+  n = nrow(senior_renamed),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# First create the correlation matrix
+fourormoreyear_cor <- cor_auto(fourormoreyear_renamed)
+
+# Then fix the positive definite issue
+library(Matrix)
+fourormoreyear_cor_fixed <- Matrix::nearPD(fourormoreyear_cor, corr = TRUE)$mat
+fourormoreyear_cor_fixed <- as.matrix(fourormoreyear_cor_fixed)
+
+# Now use the FIXED correlation matrix in EBICglasso
+fourormoreyear_network_ebic <- EBICglasso(
+  S = fourormoreyear_cor_fixed,   # Use the fixed matrix here!
+  n = nrow(fourormoreyear_renamed),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# Create the plots and save the objects
+freshmen_plot <- qgraph(freshmen_network_ebic,
+                    layout = "spring",
+                    labels = colnames(freshmen_renamed),
+                    groups = group_list,
+                    color = custom_colors,
+                    diag = FALSE,
+                    directed = FALSE,
+                    cut = 0.1,
+                    minimum = 0.1,
+                    vsize = 6,
+                    border.color = "black",
+                    border.width = 1.5,
+                    edge.color = "grey50",
+                    title = "Freshmen Network",
+                    DoNotPlot = TRUE)
+
+sophomore_plot <- qgraph(sophomore_network_ebic,
+                      layout = "spring",
+                      labels = colnames(sophomore_renamed),
+                      groups = group_list,
+                      color = custom_colors,
+                      diag = FALSE,
+                      directed = FALSE,
+                      cut = 0.1,
+                      minimum = 0.1,
+                      vsize = 6,
+                      border.color = "black",
+                      border.width = 1.5,
+                      edge.color = "grey50",
+                      title = "Sophomore Network",
+                      DoNotPlot = TRUE)
+
+senior_plot <- qgraph(senior_network_ebic,
+                      layout = "spring",
+                      labels = colnames(senior_renamed),
+                      groups = group_list,
+                      color = custom_colors,
+                      diag = FALSE,
+                      directed = FALSE,
+                      cut = 0.1,
+                      minimum = 0.1,
+                      vsize = 6,
+                      border.color = "black",
+                      border.width = 1.5,
+                      edge.color = "grey50",
+                      title = "Senior Network",
+                      DoNotPlot = TRUE)
+
+fourormoreyear_plot <- qgraph(fourormoreyear_network_ebic,
+                     layout = "spring",
+                     labels = colnames(fourormoreyear_renamed),
+                     groups = group_list,
+                     color = custom_colors,
+                     diag = FALSE,
+                     directed = FALSE,
+                     cut = 0.1,
+                     minimum = 0.1,
+                     vsize = 6,
+                     border.color = "black",
+                     border.width = 1.5,
+                     edge.color = "grey50",
+                     title = "Four+ Year Network (EBICglasso)",
+                     DoNotPlot = TRUE)
+
+# Create a 2x2 grid of plots
+png("school_year_networks.png", width = 4000, height = 2800, res = 150)
+par(mfrow = c(2, 2))
+plot(freshmen_plot)
+plot(sophomore_plot)
+plot(senior_plot)
+plot(fourormoreyear_plot)
+dev.off()
+
+```
+
+
+```{r}
+# Replace NA with 0 in all race columns
+race_cols <- c(
+  "race_black", "race_ainaan", "race_asian", 
+  "race_his", "race_pi", "race_mides", 
+  "race_white", "race_other"
+)
+
+hms_filtered[race_cols] <- lapply(hms_filtered[race_cols], function(x) {
+  x[is.na(x)] <- 0  # Replace NA with 0
+  return(x)
+})
+```
+
+```{r}
+# Calculate counts for each race column (NA treated as 0)
+race_counts <- colSums(hms_filtered[race_cols], na.rm = TRUE)
+
+# Sort to find the top 4 largest groups
+top_races <- names(sort(race_counts, decreasing = TRUE)[1:4])
+
+top_races
+```
+
+```{r}
+# Define the top 4 race groups
+top_races <- c("race_white", "race_his", "race_asian", "race_black")
+
+# Create network_data_original from hms_filtered with race columns and network variables
+network_data_original <- hms_filtered[c(top_races, network_vars)]
+
+# Replace NA with 0 in all race columns
+for (race_col in top_races) {
+  network_data_original[[race_col]][is.na(network_data_original[[race_col]])] <- 0
+}
+
+# Create separate datasets for each race group
+white_group <- network_data_original[network_data_original$race_white == 1, network_vars]
+hispanic_group <- network_data_original[network_data_original$race_his == 1, network_vars]
+asian_group <- network_data_original[network_data_original$race_asian == 1, network_vars]
+black_group <- network_data_original[network_data_original$race_black == 1, network_vars]
+
+# Store groups in a list for easier manipulation
+race_groups <- list(
+  "White" = white_group,
+  "Hispanic" = hispanic_group,
+  "Asian" = asian_group,
+  "Black" = black_group
+)
+```
+
+
+```{r}
+library(mice)
+set.seed(123)
+
+# Impute missing data for each race group
+imputed_race_groups <- lapply(race_groups, function(group) {
+  # Convert factors to numeric if needed
+  group <- group %>% mutate(across(where(is.factor), as.numeric))
+  
+  # Impute missing values in network variables
+  imputed <- mice(group, m = 5, maxit = 50, method = "pmm", printFlag = FALSE)
+  complete(imputed, 1)
+})
+
+# Verify no missing values
+lapply(imputed_race_groups, function(df) colMeans(is.na(df)))
+
+# Save imputed datasets for each race group
+for (group_name in names(imputed_race_groups)) {
+  filename <- paste0(tolower(group_name), "_network_imputed.csv")
+  write.csv(imputed_race_groups[[group_name]], filename, row.names = FALSE)
+}
+
+```
+
+
+```{r}
+# 1. Load the imputed datasets for each race group
+white_data <- read.csv("white_network_imputed.csv")
+hispanic_data <- read.csv("hispanic_network_imputed.csv")
+asian_data <- read.csv("asian_network_imputed.csv")
+black_data <- read.csv("black_network_imputed.csv")
+
+# 2. Convert dataframes to numeric matrices
+white_matrix <- as.matrix(white_data)
+hispanic_matrix <- as.matrix(hispanic_data)
+asian_matrix <- as.matrix(asian_data)
+black_matrix <- as.matrix(black_data)
+
+# 3. Run NCT for White vs. Hispanic
+nct_white_hispanic <- NCT(
+  white_matrix,
+  hispanic_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 4. Run NCT for White vs. Asian
+nct_white_asian <- NCT(
+  white_matrix,
+  asian_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 5. Run NCT for White vs. Black
+nct_white_black <- NCT(
+  white_matrix,
+  black_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 6. Run NCT for Hispanic vs. Asian
+nct_hispanic_asian <- NCT(
+  hispanic_matrix,
+  asian_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 7. Run NCT for Hispanic vs. Black
+nct_hispanic_black <- NCT(
+  hispanic_matrix,
+  black_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 8. Run NCT for Asian vs. Black
+nct_asian_black <- NCT(
+  asian_matrix,
+  black_matrix,
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  edges = "all",
+  test.centrality = TRUE,
+  centrality = c("strength", "betweenness")
+)
+
+# 9. Print all results
+cat("\n==== White vs. Hispanic Comparison ====\n")
+print(nct_white_hispanic)
+
+cat("\n==== White vs. Asian Comparison ====\n")
+print(nct_white_asian)
+
+cat("\n==== White vs. Black Comparison ====\n")
+print(nct_white_black)
+
+cat("\n==== Hispanic vs. Asian Comparison ====\n")
+print(nct_hispanic_asian)
+
+cat("\n==== Hispanic vs. Black Comparison ====\n")
+print(nct_hispanic_black)
+
+cat("\n==== Asian vs. Black Comparison ====\n")
+print(nct_asian_black)
+```
+
+
+```{r}
+white_renamed <- rename_nodes(white_data, name_mapping)
+hispanic_renamed <- rename_nodes(hispanic_data, name_mapping)
+asian_renamed <- rename_nodes(asian_data, name_mapping)
+black_renamed <- rename_nodes(black_data, name_mapping)
+
+# White Network
+white_cor <- cor_auto(white_data)
+white_network_ebic <- EBICglasso(
+  S = white_cor,
+  n = nrow(white_data),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# Hispanic Network
+hispanic_cor <- cor_auto(hispanic_data)
+hispanic_network_ebic <- EBICglasso(
+  S = hispanic_cor,
+  n = nrow(hispanic_data),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# Asian Network
+asian_cor <- cor_auto(asian_data)
+asian_network_ebic <- EBICglasso(
+  S = asian_cor,
+  n = nrow(asian_data),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# Black Network
+black_cor <- cor_auto(black_data)
+black_network_ebic <- EBICglasso(
+  S = black_cor,
+  n = nrow(black_data),
+  gamma = 0.5,
+  penalize.diagonal = FALSE
+)
+
+# 3. Create the plots and save the objects (assuming group_list and custom_colors exist)
+c <- qgraph(white_network_ebic,
+                    layout = "spring",
+                    labels = colnames(white_renamed),
+                    groups = group_list,
+                    color = custom_colors,
+                    diag = FALSE,
+                    directed = FALSE,
+                    cut = 0.1,
+                    minimum = 0.1,
+                    vsize = 6,
+                    border.color = "black",
+                    border.width = 1.5,
+                    edge.color = "grey50",
+                    title = "White Network (EBICglasso)",
+                    DoNotPlot = TRUE)
+
+hispanic_plot <- qgraph(hispanic_network_ebic,
+                      layout = "spring",
+                      labels = colnames(hispanic_renamed),
+                      groups = group_list,
+                      color = custom_colors,
+                      diag = FALSE,
+                      directed = FALSE,
+                      cut = 0.1,
+                      minimum = 0.1,
+                      vsize = 6,
+                      border.color = "black",
+                      border.width = 1.5,
+                      edge.color = "grey50",
+                      title = "Hispanic Network (EBICglasso)",
+                      DoNotPlot = TRUE)
+
+asian_plot <- qgraph(asian_network_ebic,
+                      layout = "spring",
+                      labels = colnames(asian_renamed),
+                      groups = group_list,
+                      color = custom_colors,
+                      diag = FALSE,
+                      directed = FALSE,
+                      cut = 0.1,
+                      minimum = 0.1,
+                      vsize = 6,
+                      border.color = "black",
+                      border.width = 1.5,
+                      edge.color = "grey50",
+                      title = "Asian Network (EBICglasso)",
+                      DoNotPlot = TRUE)
+
+black_plot <- qgraph(black_network_ebic,
+                     layout = "spring",
+                     labels = colnames(black_renamed),
+                     groups = group_list,
+                     color = custom_colors,
+                     diag = FALSE,
+                     directed = FALSE,
+                     cut = 0.1,
+                     minimum = 0.1,
+                     vsize = 6,
+                     border.color = "black",
+                     border.width = 1.5,
+                     edge.color = "grey50",
+                     title = "Black Network (EBICglasso)",
+                     DoNotPlot = TRUE)
+
+png("race_networks_all.png", width = 4000, height = 2800, res = 150)
+par(mfrow = c(2, 2))
+plot(white_plot)
+plot(hispanic_plot)
+plot(asian_plot)
+plot(black_plot)
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+
+
+
